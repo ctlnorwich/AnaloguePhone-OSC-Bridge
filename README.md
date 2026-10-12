@@ -108,7 +108,7 @@ nothing to `pip install`. Clone the repo onto the Pi over SSH:
 
 ```bash
 cd ~
-git clone https://github.com/<your-username>/AnaloguePhone-OSC-bridge.git
+git clone https://github.com/ctlnorwich/AnaloguePhone-OSC-bridge.git
 cd AnaloguePhone-OSC-bridge
 ```
 
