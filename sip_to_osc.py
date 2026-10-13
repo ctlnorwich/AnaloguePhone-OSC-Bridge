@@ -33,18 +33,22 @@ def values(headers, name):
     return [v for n, v in headers if n == name]
 
 
-def response(status, headers, extra=()):
+def local_tag(call_id):
+    return hashlib.md5(call_id.encode()).hexdigest()[:8]
+
+
+def response(status, headers, extra=(), body=b""):
     call_id = (values(headers, "call-id") or [""])[0]
     to = (values(headers, "to") or [""])[0]
     if ";tag=" not in to:
-        to += ";tag=" + hashlib.md5(call_id.encode()).hexdigest()[:8]
+        to += ";tag=" + local_tag(call_id)
     lines = [f"SIP/2.0 {status}"]
     lines += [f"Via: {v}" for v in values(headers, "via")]
     lines += [f"From: {v}" for v in values(headers, "from")]
     lines += [f"To: {to}", f"Call-ID: {call_id}"]
     lines += [f"CSeq: {v}" for v in values(headers, "cseq")]
-    lines += list(extra) + ["Server: sip-to-osc", "Content-Length: 0", "", ""]
-    return "\r\n".join(lines).encode()
+    lines += list(extra) + ["Server: sip-to-osc", f"Content-Length: {len(body)}", "", ""]
+    return "\r\n".join(lines).encode() + body
 
 
 def main():
