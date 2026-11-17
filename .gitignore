@@ -1,1 +1,10 @@
 __pycache__/
+
+# Audio clips stay on the machine running the bridge and aren't committed
+*.wav
+*.mp3
+*.m4a
+*.aif
+*.aiff
+*.flac
+*.ogg

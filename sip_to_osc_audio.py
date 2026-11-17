@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""SIP-to-OSC bridge that also plays a sound clip in the handset for each dialled code.
+"""SIP-to-OSC bridge that also plays a looping sound clip in the handset for each dialled code.
 
-The code is sent to TouchDesigner as OSC, as in sip_to_osc.py. Then the call is answered,
-sounds/<code>.wav (or sounds/default.wav) is played down the line, and the bridge hangs up.
-Codes with no clip get --reply instead (a busy tone by default).
+The code is sent to TouchDesigner as OSC, as in sip_to_osc.py. Then the call is answered and
+sounds/<code>.wav is looped down the line until the caller hangs up. Codes with no clip of their
+own get sounds/failstate.wav instead, or --reply (a busy tone by default) if that's missing too.
 """
 import argparse
 import random
@@ -19,6 +19,7 @@ from sip_to_osc import local_tag, osc_message, parse, response, values
 
 FRAME = 160  # bytes per RTP packet: 20 ms of 8 kHz G.711 μ-law
 SILENCE = b"\xff"  # μ-law zero level
+FAIL_CLIP = "failstate"  # played for codes that have no clip of their own
 
 
 def ulaw(sample):
@@ -58,7 +59,7 @@ def load_clip(path):
 
 
 def find_clip(sounds, code):
-    names = [code, "default"] if re.fullmatch(r"[\w*#+]+", code) else ["default"]
+    names = [code, FAIL_CLIP] if re.fullmatch(r"[\w*#+]+", code) else [FAIL_CLIP]
     for name in names:
         path = sounds / f"{name}.wav"
         if path.is_file():
@@ -112,18 +113,31 @@ class Call:
         self.bye_ok = threading.Event()  # ATA confirmed our hang-up
 
 
-def play(sip, calls, call_id, call):
+def frames(audio, gap):
+    """20 ms payloads: a 0.25 s lead-in, then the clip (plus `gap` seconds of silence) on repeat."""
+    for _ in range(2000 // FRAME + 1):
+        yield SILENCE * FRAME
+    loop = audio + SILENCE * int(gap * 8000) or SILENCE * FRAME
+    if len(loop) < FRAME:
+        loop *= FRAME // len(loop) + 1
+    pos = 0
+    while True:
+        end = pos + FRAME
+        yield loop[pos:end] if end <= len(loop) else loop[pos:] + loop[:end - len(loop)]
+        pos = end % len(loop)
+
+
+def play(sip, calls, call_id, call, gap, max_seconds):
     call.acked.wait(2)  # start anyway if the ACK went missing
-    audio = SILENCE * 2000 + call.audio + SILENCE * 2400  # 0.25 s lead-in, 0.3 s tail
-    audio += SILENCE * (-len(audio) % FRAME)
     seq, timestamp, ssrc = random.getrandbits(16), random.getrandbits(32), random.getrandbits(32)
     start = time.monotonic()
-    for n, i in enumerate(range(0, len(audio), FRAME)):
-        if call.hung_up.is_set():
+    # Loop until the caller hangs up, or until max_seconds in case their hang-up never arrives
+    for n, payload in enumerate(frames(call.audio, gap)):
+        if call.hung_up.is_set() or n * 0.02 >= max_seconds:
             break
         header = struct.pack("!BBHII", 0x80, 0x80 if n == 0 else 0, (seq + n) & 0xFFFF,
-                             (timestamp + i) & 0xFFFFFFFF, ssrc)
-        call.rtp.sendto(header + audio[i:i + FRAME], call.media)
+                             (timestamp + n * FRAME) & 0xFFFFFFFF, ssrc)
+        call.rtp.sendto(header + payload, call.media)
         time.sleep(max(0.0, start + (n + 1) * 0.02 - time.monotonic()))
     if not call.hung_up.is_set():
         for wait in (0.5, 1, 2, 4):  # resend the BYE until the ATA answers it
@@ -149,8 +163,12 @@ def main():
     ap.add_argument("--osc-address", default="/phone/dial")
     ap.add_argument("--sip-port", type=int, default=5060)
     ap.add_argument("--sounds", type=Path, default=Path(__file__).resolve().parent / "sounds",
-                    help="folder of <code>.wav clips, plus an optional default.wav")
-    ap.add_argument("--reply", default="486 Busy Here", help="SIP reply for codes with no clip (486 = busy tone)")
+                    help=f"folder of <code>.wav clips, plus an optional {FAIL_CLIP}.wav for other codes")
+    ap.add_argument("--reply", default="486 Busy Here",
+                    help=f"SIP reply when there's no clip to play, not even {FAIL_CLIP}.wav (486 = busy tone)")
+    ap.add_argument("--gap", type=float, default=0, help="seconds of silence between repeats of a clip")
+    ap.add_argument("--max-seconds", type=float, default=1800,
+                    help="hang up after this long even if the caller hasn't (a safety limit)")
     args = ap.parse_args()
 
     osc = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -160,6 +178,8 @@ def main():
     clips = sorted(p.name for p in args.sounds.glob("*.wav")) if args.sounds.is_dir() else []
     print(f"listening for SIP on UDP {args.sip_port}, sending OSC to {td}", flush=True)
     print(f"clips in {args.sounds}: {', '.join(clips) or 'none'}", flush=True)
+    if f"{FAIL_CLIP}.wav" not in clips:
+        print(f"no {FAIL_CLIP}.wav: other codes will get '{args.reply}'", flush=True)
     seen, calls = {}, {}
 
     while True:
@@ -213,8 +233,9 @@ def main():
             call = calls[call_id] = Call(ok, bye_request(headers, addr, local_ip, args.sip_port),
                                          addr, media, rtp, audio)
             sip.sendto(ok, addr)
-            print(f"playing {clip.name} ({len(audio) / 8000:.1f} s)", flush=True)
-            threading.Thread(target=play, args=(sip, calls, call_id, call), daemon=True).start()
+            print(f"playing {clip.name} ({len(audio) / 8000:.1f} s, looping until hang-up)", flush=True)
+            threading.Thread(target=play, args=(sip, calls, call_id, call, args.gap, args.max_seconds),
+                             daemon=True).start()
         elif method == "ACK":
             if call:
                 call.acked.set()

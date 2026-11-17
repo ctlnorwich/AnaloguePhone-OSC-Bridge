@@ -23,8 +23,8 @@ A small Python script on the Mac:
 
 1. Listens for that `INVITE` and takes out the number.
 2. Sends the number to TouchDesigner as an OSC message (`/phone/dial "1234"`).
-3. Either rejects the call so the phone plays a busy tone ([`sip_to_osc.py`](./sip_to_osc.py)), or answers it,
-   plays a sound clip, and hangs up ([`sip_to_osc_audio.py`](./sip_to_osc_audio.py), see [section 7](#7-play-a-sound-in-the-handset-optional)).
+3. Either rejects the call so the phone plays a busy tone ([`sip_to_osc.py`](./sip_to_osc.py)), or answers it and
+   loops a sound clip until the caller hangs up ([`sip_to_osc_audio.py`](./sip_to_osc_audio.py), see [section 7](#7-play-a-sound-in-the-handset-optional)).
 
 Both scripts use only the Python standard library, so there's nothing to install.
 
@@ -222,19 +222,23 @@ Options… → Prevent automatic sleeping on power adapter when the display is o
 ## 7. Play a sound in the handset (optional)
 
 [`sip_to_osc_audio.py`](./sip_to_osc_audio.py) works the same way as `sip_to_osc.py`, except that after sending
-the code to TouchDesigner it **answers the call, plays a sound clip in the handset, and hangs up**. It also only
-uses the Python standard library. Keep it in the same folder as `sip_to_osc.py`, because it reuses code from
-that file.
+the code to TouchDesigner it **answers the call and loops a sound clip in the handset until the caller hangs up**.
+It also only uses the Python standard library. Keep it in the same folder as `sip_to_osc.py`, because it reuses
+code from that file.
 
 Put the clips in the [`sounds/`](./sounds) folder, named after the code:
 
 | File | Played when |
 |---|---|
 | `sounds/1234.wav` | `1234` is dialled |
-| `sounds/default.wav` | any code that has no clip of its own (optional) |
+| `sounds/failstate.wav` | any code that has no clip of its own, such as a wrong number (optional) |
 
-Codes with no clip, and no `default.wav`, still get the busy tone (or whatever `--reply` is set to).
-The script looks for clips on every call, so you can add or change them without restarting it.
+If there's no `failstate.wav` either, wrong numbers get the busy tone (or whatever `--reply` is set to).
+The script looks for clips on every call, so you can add or change them without restarting it. Every code,
+including wrong ones, is still sent to TouchDesigner.
+
+Audio files are listed in [`.gitignore`](./.gitignore), so clips stay on the Mac and aren't committed. Copy
+them across yourself when you set up another machine.
 
 Clips must be **8000 Hz mono WAV**, as either μ-law or 16-bit PCM (phone lines can't carry better quality
 anyway). Convert any audio file with `ffmpeg` (`brew install ffmpeg`):
@@ -262,22 +266,31 @@ ffmpeg -i ~/Downloads/code-accepted.mp3 -ar 8000 -ac 1 -c:a pcm_mulaw sounds/123
    python3 sip_to_osc_audio.py
    ```
 
-4. Pick up the phone and dial `1234#`. You should hear the beep, and the script should print:
+4. Pick up the phone and dial `1234#`. You should hear the beep repeating, and the script should print:
 
    ```
    clips in /Users/you/Dev/AnaloguePhone-OSC-bridge/sounds: 1234.wav
+   no failstate.wav: other codes will get '486 Busy Here'
    ATA registered from 192.168.50.10
    dialled: 1234
-   playing 1234.wav (1.0 s)
+   playing 1234.wav (1.0 s, looping until hang-up)
    ```
 
-5. Dial a code with no clip, such as `999#`. You should hear the busy tone as before.
+5. Dial a code with no clip, such as `999#`. You should hear the busy tone.
+6. Add a clip for wrong numbers, for example
+   `say -o sounds/failstate.wav --data-format=LEI16@8000 "Sorry, wrong number"`, then dial `999#` again.
+   You should now hear that message on repeat.
 
-After the clip the bridge hangs up. What you hear next (silence, a busy tone, or a dial tone) depends on the
-ATA. Hanging up during a clip stops it.
+The clip repeats until the caller hangs up. As a safety limit, the bridge hangs up itself after 30 minutes, in
+case the ATA never reports the hang-up.
 
-`sip_to_osc_audio.py` has the same `--td-host`, `--td-port`, `--osc-address` and `--reply` options, plus
-`--sounds /some/folder` to keep the clips somewhere else.
+`sip_to_osc_audio.py` has the same `--td-host`, `--td-port`, `--osc-address` and `--reply` options, plus:
+
+| Option | Default | What it does |
+|---|---|---|
+| `--sounds /some/folder` | `sounds/` next to the script | Where to look for clips |
+| `--gap 1.5` | `0` (seamless) | Seconds of silence between repeats. Useful for spoken messages |
+| `--max-seconds 600` | `1800` | Safety limit: hang up after this long even if the caller hasn't |
 
 ## Troubleshooting
 
