@@ -106,8 +106,9 @@ def bye_request(headers, ata, local_ip, sip_port):
 
 
 class Call:
-    def __init__(self, ok, bye, ata, media, rtp, audio):
-        self.ok, self.bye, self.ata, self.media, self.rtp, self.audio = ok, bye, ata, media, rtp, audio
+    def __init__(self, code, ok, bye, ata, media, rtp, audio):
+        self.code, self.ok, self.bye, self.ata = code, ok, bye, ata
+        self.media, self.rtp, self.audio = media, rtp, audio
         self.acked = threading.Event()  # ATA confirmed our answer
         self.hung_up = threading.Event()  # caller put the handset down
         self.bye_ok = threading.Event()  # ATA confirmed our hang-up
@@ -161,6 +162,8 @@ def main():
     ap.add_argument("--td-host", default="127.0.0.1", help="IP of the TouchDesigner machine")
     ap.add_argument("--td-port", type=int, default=7000, help="OSC In port in TouchDesigner")
     ap.add_argument("--osc-address", default="/phone/dial")
+    ap.add_argument("--osc-hangup-address", default="/phone/hangup",
+                    help="sent (with the dialled code) when the caller hangs up during a clip")
     ap.add_argument("--sip-port", type=int, default=5060)
     ap.add_argument("--sounds", type=Path, default=Path(__file__).resolve().parent / "sounds",
                     help=f"folder of <code>.wav clips, plus an optional {FAIL_CLIP}.wav for other codes")
@@ -230,7 +233,7 @@ def main():
             extra = [f"Contact: <sip:{local_ip}:{args.sip_port}>", "Content-Type: application/sdp",
                      "Allow: INVITE, ACK, BYE, CANCEL, OPTIONS"]
             ok = response("200 OK", headers, extra, sdp(local_ip, rtp.getsockname()[1]))
-            call = calls[call_id] = Call(ok, bye_request(headers, addr, local_ip, args.sip_port),
+            call = calls[call_id] = Call(code, ok, bye_request(headers, addr, local_ip, args.sip_port),
                                          addr, media, rtp, audio)
             sip.sendto(ok, addr)
             print(f"playing {clip.name} ({len(audio) / 8000:.1f} s, looping until hang-up)", flush=True)
@@ -241,8 +244,10 @@ def main():
                 call.acked.set()
         elif method == "BYE":
             sip.sendto(response("200 OK", headers), addr)
-            if call:
+            if call and not call.hung_up.is_set():  # first BYE only, not the ATA's retransmissions
                 call.hung_up.set()
+                print(f"hung up: {call.code}", flush=True)
+                osc.sendto(osc_message(args.osc_hangup_address, call.code), td)
         elif method == "REGISTER":
             extra = [f"Contact: {c}" for c in values(headers, "contact")] + ["Expires: 3600"]
             sip.sendto(response("200 OK", headers, extra), addr)

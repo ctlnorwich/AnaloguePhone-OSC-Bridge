@@ -158,18 +158,23 @@ a different tone), and `--test 1234`, which sends one OSC message and exits.
 ```python
 # osc in callbacks
 def onReceiveOSC(dat, rowIndex, message, byteData, timeStamp, address, args, peer):
-    if address != '/phone/dial' or not args:
+    if not args:
         return
     code = str(args[0])          # string, so leading zeros ("007") survive
-    print('phone dialled', code)
 
-    if code == '1':
+    if address == '/phone/dial':
+        print('phone dialled', code)
+        if code == '1':
+            op('switch1').par.index = 0
+        elif code == '2':
+            op('switch1').par.index = 1
+        elif code == '999':
+            op('moviefilein1').par.cuepulse.pulse()
+        # ...or use: op('codes_table')[code, 1] to look up codes in a Table DAT
+
+    elif address == '/phone/hangup':  # only from sip_to_osc_audio.py, see section 7
+        print('phone hung up after', code)
         op('switch1').par.index = 0
-    elif code == '2':
-        op('switch1').par.index = 1
-    elif code == '999':
-        op('moviefilein1').par.cuepulse.pulse()
-    # ...or use: op('codes_table')[code, 1] to look up codes in a Table DAT
     return
 ```
 
@@ -284,6 +289,21 @@ ffmpeg -i ~/Downloads/code-accepted.mp3 -ar 8000 -ac 1 -c:a pcm_mulaw sounds/123
 The clip repeats until the caller hangs up. As a safety limit, the bridge hangs up itself after 30 minutes, in
 case the ATA never reports the hang-up.
 
+### Hang-up message
+
+When the caller puts the handset down during a clip, the ATA sends a SIP `BYE` message. The bridge then sends
+`/phone/hangup "1234"` to TouchDesigner, with the code that was dialled. The script prints `hung up: 1234`.
+
+You only get this for calls the bridge answered, meaning codes with a clip or a `failstate.wav`. The ATA doesn't
+report anything when:
+
+- the handset is put down after a busy tone. The call was already rejected, so there's nothing left to end.
+- the handset is picked up and put down again without dialling. No call was made.
+- the bridge hangs up itself at the `--max-seconds` limit, so no `/phone/hangup` is sent.
+
+`sip_to_osc.py` rejects every call, so it never sends `/phone/hangup`. Add a `failstate.wav` so that wrong
+numbers send a hang-up message too.
+
 `sip_to_osc_audio.py` has the same `--td-host`, `--td-port`, `--osc-address` and `--reply` options, plus:
 
 | Option | Default | What it does |
@@ -291,6 +311,7 @@ case the ATA never reports the hang-up.
 | `--sounds /some/folder` | `sounds/` next to the script | Where to look for clips |
 | `--gap 1.5` | `0` (seamless) | Seconds of silence between repeats. Useful for spoken messages |
 | `--max-seconds 600` | `1800` | Safety limit: hang up after this long even if the caller hasn't |
+| `--osc-hangup-address /x` | `/phone/hangup` | OSC address for the hang-up message |
 
 ## Troubleshooting
 
