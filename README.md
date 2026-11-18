@@ -163,6 +163,9 @@ def onReceiveOSC(dat, rowIndex, message, byteData, timeStamp, address, args, pee
     code = str(args[0])          # string, so leading zeros ("007") survive
 
     if address == '/phone/dial':
+        if code == 'fail':           # wrong number, only from sip_to_osc_audio.py (section 7)
+            print('wrong number')
+            return
         print('phone dialled', code)
         if code == '1':
             op('switch1').par.index = 0
@@ -239,8 +242,17 @@ Put the clips in the [`sounds/`](./sounds) folder, named after the code:
 | `sounds/failstate.wav` | any code that has no clip of its own, such as a wrong number (optional) |
 
 If there's no `failstate.wav` either, wrong numbers get the busy tone (or whatever `--reply` is set to).
-The script looks for clips on every call, so you can add or change them without restarting it. Every code,
-including wrong ones, is still sent to TouchDesigner.
+The script looks for clips on every call, so you can add or change them without restarting it.
+
+A code with no clip of its own is a wrong number. TouchDesigner gets `"fail"` instead of the number:
+
+| Dialled | OSC message | On hang-up |
+|---|---|---|
+| `1234` (has `sounds/1234.wav`) | `/phone/dial "1234"` | `/phone/hangup "1234"` |
+| `12345` (no clip of its own) | `/phone/dial "fail"` | `/phone/hangup "fail"` |
+
+`"fail"` is sent whether the failstate clip or the busy tone is played. The script still prints the number in
+Terminal (`dialled: 12345 (fail)`), so you can see what was dialled.
 
 Audio files are listed in [`.gitignore`](./.gitignore), so clips stay on the Mac and aren't committed. Copy
 them across yourself when you set up another machine.
@@ -281,7 +293,8 @@ ffmpeg -i ~/Downloads/code-accepted.mp3 -ar 8000 -ac 1 -c:a pcm_mulaw sounds/123
    playing 1234.wav (1.0 s, looping until hang-up)
    ```
 
-5. Dial a code with no clip, such as `999#`. You should hear the busy tone.
+5. Dial a code with no clip, such as `999#`. You should hear the busy tone, and the script prints
+   `dialled: 999 (fail)`.
 6. Add a clip for wrong numbers, for example
    `say -o sounds/failstate.wav --data-format=LEI16@8000 "Sorry, wrong number"`, then dial `999#` again.
    You should now hear that message on repeat.
@@ -292,7 +305,8 @@ case the ATA never reports the hang-up.
 ### Hang-up message
 
 When the caller puts the handset down during a clip, the ATA sends a SIP `BYE` message. The bridge then sends
-`/phone/hangup "1234"` to TouchDesigner, with the code that was dialled. The script prints `hung up: 1234`.
+`/phone/hangup "1234"` to TouchDesigner, with the code that was dialled, or `"fail"` after a wrong number. The
+script prints `hung up: 1234`.
 
 You only get this for calls the bridge answered, meaning codes with a clip or a `failstate.wav`. The ATA doesn't
 report anything when:

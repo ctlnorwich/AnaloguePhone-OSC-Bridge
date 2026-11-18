@@ -212,10 +212,13 @@ def main():
             seen[call_id] = now
             m = re.match(r"sips?:([^@;>]+)@", uri)
             code = unquote(m.group(1)) if m else ""
-            print(f"dialled: {code}", flush=True)
+            clip, audio = find_clip(args.sounds, code), None
+            failed = clip is None or clip.stem == FAIL_CLIP  # no clip of its own: a wrong number
+            print(f"dialled: {code}{' (fail)' if failed else ''}", flush=True)
+            if failed:
+                code = "fail"  # TouchDesigner gets "fail" instead of the wrong number, here and on hang-up
             osc.sendto(osc_message(args.osc_address, code), td)
 
-            clip, audio = find_clip(args.sounds, code), None
             if clip:
                 try:
                     audio = load_clip(clip)
